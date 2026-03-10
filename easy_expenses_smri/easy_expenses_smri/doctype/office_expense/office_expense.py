@@ -8,9 +8,13 @@ from frappe.model.document import Document
 class OfficeExpense(Document):
 	def before_save(doc):
 		# firstly check if total amount payment = total amount of expense
-		if sum([each_exp.get('amount') for each_exp in doc.multi_expense]) != sum([each_pay.get('amount') for each_pay in doc.payment]):
-			frappe.throw('Total payments do not match total expenses.')
+		if doc.paid_from_employee_advance and doc.employee_advances:
+			pass # no need to verify, as total expenses will go into that
+		else:
+			if sum([each_exp.get('amount') for each_exp in doc.multi_expense]) != sum([each_pay.get('amount') for each_pay in doc.payment]):
+				frappe.throw('Total payments do not match total expenses.')
 		doc.amount = sum([each_exp.get('amount') for each_exp in doc.multi_expense])
+
 
 	def before_submit(doc):
 		# Validate mandatory fields
@@ -24,7 +28,8 @@ class OfficeExpense(Document):
 		# je.custom_linked_document = doc.name
 		je.voucher_type = "Journal Entry"
 		je.posting_date = doc.posting_date
-		je.user_remark = ', '.join([f"{each_exp.get('expense_category')} : Rs.{each_exp.get('amount')}" for each_exp in doc.multi_expense])
+		je.user_remark = f"Office Expense : {doc.name}\n"
+		je.user_remark += ', '.join([f"{each_exp.get('expense_category')} : Rs.{each_exp.get('amount')}" for each_exp in doc.multi_expense])
 		je.user_remark += '\n'+(doc.additional_info if doc.additional_info else '')
 		
 		# First account - Assign Head (Debit)
@@ -48,6 +53,20 @@ class OfficeExpense(Document):
 				"account": payment_account,
 				"debit_in_account_currency": 0,
 				"credit_in_account_currency": each_pay.get('amount'),
+			})
+
+		# Second account - Employee Advance (Credit) if applicable
+		if doc.paid_from_employee_advance and doc.employee_advances:
+			advance_doc = frappe.get_doc("Employee Advances", doc.employee_advances)
+			advance_account = frappe.get_doc("Employee Management Settings").employee_advance_head
+			je.append("accounts", {
+				"account": advance_account,
+				"party_type": "Employee",
+				"party": advance_doc.employee,
+				"debit_in_account_currency": 0,
+				"credit_in_account_currency": doc.amount,
+				"reference_type": "Journal Entry",
+				"reference_name": advance_doc.journal_entry
 			})
 
 		# Save the Journal Entry
